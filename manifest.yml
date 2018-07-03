@@ -1,0 +1,7 @@
+---
+applications:
+- name: ytutility
+  memory: 1G
+  instances: 1
+  path: ./target/YTUtility-0.0.1-SNAPSHOT.jar
+    
