@@ -39,6 +39,11 @@ public class ChannelInfo {
     private String customUrl;
 
     /**
+     * api field: contentDetails.relatedPlaylists.uploads
+     */
+    private String uploadsPlaylistId;
+
+    /**
      * api field: snippet.thumbnails.[high,medium,default]
      */
     @Column(name="thumbnail_url", length=2048)
@@ -78,6 +83,9 @@ public class ChannelInfo {
 
     public String getCustomUrl() { return customUrl; }
     public void setCustomUrl(String customUrl) { this.customUrl = customUrl; }
+
+    public String getUploadsPlaylistId() { return uploadsPlaylistId; }
+    public void setUploadsPlaylistId(String uploadsPlaylistId) { this.uploadsPlaylistId = uploadsPlaylistId; }
 
     public String getThumbnailUrl() { return thumbnailUrl; }
     public void setThumbnailUrl(String thumbnailUrl) { this.thumbnailUrl = thumbnailUrl; }

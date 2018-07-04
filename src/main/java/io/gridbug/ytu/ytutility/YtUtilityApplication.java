@@ -169,11 +169,12 @@ public class YtUtilityApplication implements CommandLineRunner {
 						ChannelListResponse response = videos.execute();
 						LOGGER.log(Level.INFO, "run-channel-check | api responds # records: " + 
 							response.getPageInfo().getTotalResults());
-				
+
 						// create the model object for our db and save it
 						ChannelInfo chan = new ChannelInfo();
 						chan.setId(check.getId());
 						chan.setCustomUrl(response.getItems().get(0).getSnippet().getCustomUrl());
+						chan.setUploadsPlaylistId(response.getItems().get(0).getContentDetails().getRelatedPlaylists().getUploads());
 						chan.setCreatedOn(new DateTime(
 								response.getItems().get(0).getSnippet().getPublishedAt().getValue()));
 						chan.setDescription(response.getItems().get(0).getSnippet().getDescription());
