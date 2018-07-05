@@ -42,6 +42,7 @@ import io.gridbug.ytu.ytutility.configuration.YoutubeService;
 import io.gridbug.ytu.ytutility.dao.ChannelInfoRepository;
 import io.gridbug.ytu.ytutility.dao.SubscriptionRepository;
 import io.gridbug.ytu.ytutility.model.Subscription;
+import io.gridbug.ytu.ytutility.model.VideoForChannelCheck;
 import io.gridbug.ytu.ytutility.model.ChannelCheck;
 import io.gridbug.ytu.ytutility.model.ChannelInfo;
 
@@ -138,8 +139,25 @@ public class YtUtilityApplication implements CommandLineRunner {
 				runChannelCheck(youtube, pargs);
 			}
 
-			if (pargs.getOptionNames().contains("")) {
-				
+			// if invoked with --stage-video-for-channel-check, we will write a descriptor requesting
+			// a check for new videos for each channel
+			if (pargs.getOptionNames().contains("stage-video-for-channel-check")) {
+				LOGGER.log(Level.INFO, "yt utility called stage-video-for-channel-check");
+				stageVideoForChannelCheck();
+			}
+
+			// if invoked with --run-video-for-channel-check, we will look at the descriptors in the
+			// check directory and pull uploads from the channel via api. we'll do a full scrape if
+			// no existing info for the channel exists; otherwise we'll pull only new video entries
+			if (pargs.getOptionNames().contains("run-video-for-channel-check")) {
+				LOGGER.log(Level.INFO, "yt utility called run-video-for-channel-check");
+				runVideoForChannelCheck(youtube);
+			}
+
+			if (pargs.getOptionNames().contains("test-read-video-entry")) {
+				JsonParser parser = ytService.getJsonFactory().createJsonParser(new FileInputStream(new File("/Users/colrich/ytu-data/channel-data-x/UC-EnprmCZ3OXyAoG7vjVNCA/dYZrA-NSsaU.json")));
+				PlaylistItem check = parser.parse(PlaylistItem.class);
+				LOGGER.log(Level.INFO, "****** checkid: " + check.getSnippet().getResourceId().getVideoId());
 			}
 
 			LOGGER.log(Level.INFO, "yt utility CommandLineRunner execution complete; exiting via normal path");
@@ -149,6 +167,83 @@ public class YtUtilityApplication implements CommandLineRunner {
 			System.out.println("failed to get youtube service");
 			ioe.printStackTrace();
 		}
+	}
+
+	private void runVideoForChannelCheck(YouTube youtube) throws IOException {
+		try (Stream<Path> paths = Files.walk(Paths.get(ytProperties.getVideoForChannelCheckPath()))) {
+			List<Boolean> outcomes = paths.filter(Files::isRegularFile)
+				.filter(path -> path.getFileName().toString().endsWith(".json"))
+				.map(path -> {
+					try {
+						LOGGER.log(Level.INFO, "run-video-for-channel-check | operating on path: " + path);
+						com.fasterxml.jackson.core.JsonParser parser = getJsonFactory().createParser(path.toFile());
+						VideoForChannelCheck check = parser.readValueAs(VideoForChannelCheck.class);
+						LOGGER.log(Level.INFO, "run-video-for-channel-check | running channel check: " +
+							check.getChannelId());
+
+						Optional<ChannelInfo> chan = chandao.findById(check.getChannelId());
+						if (chan.isPresent()) {
+							ensureDirectory(getChannelDataDirectory(check.getChannelId()));
+							
+							YouTube.PlaylistItems.List videos = youtube.playlistItems().list("snippet,contentDetails");
+							videos.setPlaylistId(chan.get().getUploadsPlaylistId());
+							videos.setMaxResults(50L);
+							PlaylistItemListResponse response = videos.execute();
+							response.getItems().forEach(video -> {
+								try {
+									LOGGER.log(Level.INFO, "run-video-for-channel-check -> for-each-video | writing video entry: " + video.getSnippet().getResourceId().getVideoId());
+									// write a json file with each video item in the channel's video data directory
+									writeJsonGObject(video, getChannelDataDirectory(check.getChannelId()) + 
+										video.getSnippet().getResourceId().getVideoId() + ".json");
+								}
+								catch (IOException ioe) {
+									LOGGER.log(Level.INFO, "run-video-for-channel-check -> for-each-video | io exception: " + video, ioe);
+								}
+							});
+						}
+						else {
+							LOGGER.log(Level.INFO, "run-video-for-channel-check | no channel info found for: " + 
+								check.getChannelId());
+							return false;
+						}
+
+						path.toFile().delete();
+
+						delaySeconds(2);
+						return true;
+					}
+					catch (IOException ioe) {
+						LOGGER.log(Level.INFO, "run-video-for-channel-check | io exception on path: " + path, ioe);
+						return false;
+					}
+				})
+				.collect(Collectors.toList());
+				LOGGER.log(Level.INFO, "run-video-for-channel-check | outcomes: " + outcomes);
+		}
+		
+	}
+
+	private String getChannelDataDirectory(String channelId) {
+		return ytProperties.getChannelDataPath() + File.separator + channelId + File.separator;
+	}
+
+	private void ensureDirectory(String path) {
+		File dir = new File(path);
+		if (!dir.exists()) dir.mkdirs();
+	}
+
+	private void stageVideoForChannelCheck() {
+		Iterable<ChannelInfo> chans = chandao.findAll();
+		chans.forEach(chan -> {
+			try {
+				LOGGER.log(Level.INFO, "stage-video-check | writing descriptor for " + chan.getId());
+				writeVideoForChannelCheckDescriptor(chan.getId());
+			}
+			catch (IOException ioe) {
+				LOGGER.log(Level.INFO, "stage-video-check | io exception writing descriptor for channel: " +
+						chan.getId(), ioe);
+			}
+		});
 	}
 
 	private void runChannelCheck(YouTube youtube, ApplicationArguments pargs) throws IOException {
@@ -269,6 +364,22 @@ public class YtUtilityApplication implements CommandLineRunner {
 	}
 
 	/**
+	 * writes the channel-check json descriptor that gets picked up by the channel checker
+	 */
+	private void writeVideoForChannelCheckDescriptor(String channelId) throws IOException {
+		VideoForChannelCheck check = new VideoForChannelCheck();
+		check.setChannelId(channelId);
+		check.setRequestedOn(DateTime.now());
+		writeJsonDescriptor(check, ytProperties.getVideoForChannelCheckPath() + File.separator + channelId + ".json");
+	}
+
+	private void writeCompletedVideoForChannelCheckDescriptor(VideoForChannelCheck check) throws IOException {
+		writeJsonDescriptor(check, ytProperties.getCompletedActionsPath() + File.separator 
+			+ "video-for-channel-check-" + check.getChannelId() + ".json");
+	}
+
+
+	/**
 	 * takes a json file containing one or more subscription records from the yt api and makes the
 	 * tracking db entries, updating existing records if found
 	 */
@@ -295,11 +406,11 @@ public class YtUtilityApplication implements CommandLineRunner {
 				subsdao.save(sub);
 			});
 	
-			LOGGER.log(Level.INFO, "putSubJsonToDB| " + filePath + " | successful");
+			LOGGER.log(Level.INFO, "putSubJsonToDB | " + filePath + " | successful");
 			return true;
 		}
 		catch (IOException ioe) {
-			LOGGER.log(Level.WARNING, "putSubJsonToDB| " + filePath + " | failed with IO exception", ioe);
+			LOGGER.log(Level.WARNING, "putSubJsonToDB | " + filePath + " | failed with IO exception", ioe);
 			return false;
 		}
 	}
@@ -327,8 +438,14 @@ public class YtUtilityApplication implements CommandLineRunner {
 		File chancheck = new File(ytProperties.getChannelCheckPath());
 		if (!chancheck.exists()) chancheck.mkdirs();
 
+		File v4chancheck = new File(ytProperties.getVideoForChannelCheckPath());
+		if (!v4chancheck.exists()) v4chancheck.mkdirs();
+
 		File completed = new File(ytProperties.getCompletedActionsPath());
 		if (!completed.exists()) completed.mkdirs();
+
+		File channeldata = new File(ytProperties.getChannelDataPath());
+		if (!channeldata.exists()) channeldata.mkdirs();
 
 		return true;
 	}
@@ -360,6 +477,15 @@ public class YtUtilityApplication implements CommandLineRunner {
 		JsonGenerator jsongen = getJsonFactory().createGenerator(new FileOutputStream(filename));
 		jsongen.writeObject(descriptor);
 		jsongen.close();
+	}
+
+	private void writeJsonGObject(Object googleObject, String filename) throws IOException {
+		com.google.api.client.json.JsonGenerator gen = ytService.getJsonFactory().createJsonGenerator(new FileWriter(new File(filename)));
+		gen.serialize(googleObject);
+		gen.close();
+//		JsonGenerator jsongen = getJsonFactory().createGenerator(new FileOutputStream(filename));
+//		jsongen.writeObject(descriptor);
+//		jsongen.close();
 	}
 
 	private void delaySeconds(int seconds) {

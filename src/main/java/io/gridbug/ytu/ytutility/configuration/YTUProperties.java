@@ -42,10 +42,20 @@ public class YTUProperties {
     public String getChancheckSubpath() { return chancheckSubpath; }
     public void setChancheckSubpath(String chancheckSubpath) { this.chancheckSubpath = chancheckSubpath; }
 
+    private String videoForChancheckSubpath;
+    
+    public String getVideoForChancheckSubpath() { return videoForChancheckSubpath; }
+    public void setVideoForChancheckSubpath(String videoForChancheckSubpath) { this.videoForChancheckSubpath = videoForChancheckSubpath; }
+
     private String completedActionsSubpath;
 
     public String getCompletedActionsSubpath() { return completedActionsSubpath; }
     public void setCompletedActionsSubpath(String completedActionsSubpath) { this.completedActionsSubpath = completedActionsSubpath; }
+
+    private String channelDataSubpath;
+
+    public String getChannelDataSubpath() { return channelDataSubpath; }
+    public void setChannelDataSubpath(String channelDataSubpath) { this.channelDataSubpath = channelDataSubpath; }
 
 
     public String getSubsPath() {
@@ -64,8 +74,15 @@ public class YTUProperties {
         return getJsonPath() + File.separator + getChancheckSubpath();
     }
 
+    public String getVideoForChannelCheckPath() {
+        return getJsonPath() + File.separator + getVideoForChancheckSubpath();
+    }
+
     public String getCompletedActionsPath() {
         return getJsonPath() + File.separator + getCompletedActionsSubpath();
     }
 
+    public String getChannelDataPath() {
+        return getJsonPath() + File.separator + getChannelDataSubpath();
+    }
 }
