@@ -19,6 +19,8 @@ import java.io.OutputStreamWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -154,11 +156,14 @@ public class YtUtilityApplication implements CommandLineRunner {
 				runVideoForChannelCheck(youtube);
 			}
 
-			if (pargs.getOptionNames().contains("test-read-video-entry")) {
-				JsonParser parser = ytService.getJsonFactory().createJsonParser(new FileInputStream(new File("/Users/colrich/ytu-data/channel-data-x/UC-EnprmCZ3OXyAoG7vjVNCA/dYZrA-NSsaU.json")));
-				PlaylistItem check = parser.parse(PlaylistItem.class);
-				LOGGER.log(Level.INFO, "****** checkid: " + check.getSnippet().getResourceId().getVideoId());
+			// if invoked with --fetch-video-details, we use the api to get detailed info about each
+			// video in the channel data directory, skipping those that have already been fetched
+			if (pargs.getOptionNames().contains("fetch-video-details")) {
+				LOGGER.log(Level.INFO, "yt utility called fetch-video-details");
+				fetchVideoDetails(youtube);
 			}
+
+
 
 			LOGGER.log(Level.INFO, "yt utility CommandLineRunner execution complete; exiting via normal path");
 			System.exit(NORMAL_EXIT);
@@ -166,6 +171,45 @@ public class YtUtilityApplication implements CommandLineRunner {
 		catch (IOException ioe) {
 			System.out.println("failed to get youtube service");
 			ioe.printStackTrace();
+		}
+	}
+
+	private void fetchVideoDetails(YouTube youtube) throws IOException {
+		try (Stream<Path> channels = Files.walk(Paths.get(ytProperties.getChannelDataPath()))) {
+			List<Boolean> outcomes = channels.filter(Files::isRegularFile)
+				.filter(path -> !path.toString().contains("details-"))
+				.map(channelDirectory -> {
+					try {
+						LOGGER.log(Level.INFO, "fetch-video-details -> each-channel | on path: " + channelDirectory);
+
+						// read the video descriptor to get necessary info for the api call
+						JsonParser parser = ytService.getJsonFactory().createJsonParser(new FileInputStream(channelDirectory.toFile()));
+						PlaylistItem check = parser.parse(PlaylistItem.class);
+						
+						// check to see if we already have the details file, don't refetch if so
+						File excheck = new File(getChannelDataDirectory(check.getSnippet().getChannelId()) + "details-" + check.getSnippet().getResourceId().getVideoId() + ".json");
+						if (excheck.exists()) {
+							LOGGER.log(Level.INFO, "details file exists: " + excheck.getAbsolutePath() + ", skipping");
+							return true;
+						}
+
+						// call the api to get the video details
+						YouTube.Videos.List video = youtube.videos().list("snippet,contentDetails,status,statistics");
+						video.setId(check.getSnippet().getResourceId().getVideoId());
+						VideoListResponse response = video.execute();
+
+						// write the details file with the api results
+						writeJsonGObject(response.getItems().get(0), getChannelDataDirectory(check.getSnippet().getChannelId()) + "details-" + check.getSnippet().getResourceId().getVideoId() + ".json");
+
+						return true;
+					}
+					catch (Exception ioe) {
+						LOGGER.log(Level.INFO, "fetch-video-details | io exception: " + channelDirectory, ioe);
+						return false;
+					}
+				})
+				.collect(Collectors.toList());
+			LOGGER.log(Level.INFO, "fetch-video-details | outcomes: " + outcomes);
 		}
 	}
 
@@ -207,6 +251,7 @@ public class YtUtilityApplication implements CommandLineRunner {
 							return false;
 						}
 
+						LOGGER.log(Level.INFO, "run-video-for-channel-check | about to delete descriptor: " + path);
 						path.toFile().delete();
 
 						delaySeconds(2);
@@ -218,7 +263,7 @@ public class YtUtilityApplication implements CommandLineRunner {
 					}
 				})
 				.collect(Collectors.toList());
-				LOGGER.log(Level.INFO, "run-video-for-channel-check | outcomes: " + outcomes);
+			LOGGER.log(Level.INFO, "run-video-for-channel-check | outcomes: " + outcomes);
 		}
 		
 	}
@@ -305,7 +350,7 @@ public class YtUtilityApplication implements CommandLineRunner {
 					}
 				})
 				.collect(Collectors.toList());
-				LOGGER.log(Level.INFO, "run-channel-check | outcomes: " + outcomes);
+			LOGGER.log(Level.INFO, "run-channel-check | outcomes: " + outcomes);
 		}		
 	}
 
