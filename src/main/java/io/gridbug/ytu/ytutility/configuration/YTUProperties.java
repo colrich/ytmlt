@@ -57,6 +57,11 @@ public class YTUProperties {
     public String getChannelDataSubpath() { return channelDataSubpath; }
     public void setChannelDataSubpath(String channelDataSubpath) { this.channelDataSubpath = channelDataSubpath; }
 
+    private String videoFetchSubpath;
+    
+    public String getVideoFetchSubpath() { return videoFetchSubpath; }
+    public void setVideoFetchSubpath(String videoFetchSubpath) { this.videoFetchSubpath = videoFetchSubpath; }
+
 
     public String getSubsPath() {
         return getJsonPath() + File.separator + getSubsSubpath();
@@ -84,5 +89,9 @@ public class YTUProperties {
 
     public String getChannelDataPath() {
         return getJsonPath() + File.separator + getChannelDataSubpath();
+    }
+
+    public String getVideoFetchPath() {
+        return getJsonPath() + File.separator + getVideoFetchSubpath();
     }
 }

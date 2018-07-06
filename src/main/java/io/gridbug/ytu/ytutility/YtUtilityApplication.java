@@ -10,11 +10,13 @@ import com.google.api.client.json.JsonParser;
 import com.google.api.services.youtube.model.*;
 import com.google.api.services.youtube.YouTube;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -160,9 +162,58 @@ public class YtUtilityApplication implements CommandLineRunner {
 			// video in the channel data directory, skipping those that have already been fetched
 			if (pargs.getOptionNames().contains("fetch-video-details")) {
 				LOGGER.log(Level.INFO, "yt utility called fetch-video-details");
-				fetchVideoDetails(youtube);
+				fetchVideoDetails(youtube, true);
 			}
 
+			if (pargs.getOptionNames().contains("fetch-videos")) {
+				LOGGER.log(Level.INFO, "yt utility called fetch-videos");
+				try (Stream<Path> descriptors = Files.walk(Paths.get(ytProperties.getVideoFetchPath()))) {
+					List<Boolean> outcomes = descriptors.filter(Files::isRegularFile)
+						.filter(path -> path.toString().endsWith(".json"))
+						.map(item -> {
+							try {
+								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | on path: " + item);
+								
+								com.fasterxml.jackson.core.JsonParser parser = getJsonFactory().createParser(item.toFile());
+								ChannelCheck check = parser.readValueAs(ChannelCheck.class);
+								LOGGER.log(Level.INFO, "fetch-videos -> each descriptor | going to fetch: " +
+									check.getId());
+								
+								String cmd = "/Users/colrich/homelab/p/ytu/ytmlt/src/main/resources/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
+								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | run cmd: " + cmd);
+								Process dlp = Runtime.getRuntime().exec(cmd);
+
+								BufferedReader inx = new BufferedReader(new InputStreamReader(dlp.getInputStream()));
+								String linex;
+								while ((linex = inx.readLine()) != null) {
+									LOGGER.log(Level.INFO, linex);
+								}
+
+								BufferedReader in = new BufferedReader(new InputStreamReader(dlp.getErrorStream()));
+								String line;
+								while ((line = in.readLine()) != null) {
+									LOGGER.log(Level.INFO, line);
+								}
+
+								dlp.waitFor();
+
+								item.toFile().delete();
+
+								return true;
+							}
+							catch (IOException ioe) {
+								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | io exception on path: " + item, ioe);
+								return false;
+							}
+							catch (InterruptedException ie) {
+								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | interrupted exception: " + item, ie);
+								return false;
+							}
+						})
+						.collect(Collectors.toList());
+					LOGGER.log(Level.INFO, "fetch-videos | outcomes: " + outcomes);
+				}
+			}
 
 
 			LOGGER.log(Level.INFO, "yt utility CommandLineRunner execution complete; exiting via normal path");
@@ -174,7 +225,7 @@ public class YtUtilityApplication implements CommandLineRunner {
 		}
 	}
 
-	private void fetchVideoDetails(YouTube youtube) throws IOException {
+	private void fetchVideoDetails(YouTube youtube, boolean writeVideoFetchDescriptor) throws IOException {
 		try (Stream<Path> channels = Files.walk(Paths.get(ytProperties.getChannelDataPath()))) {
 			List<Boolean> outcomes = channels.filter(Files::isRegularFile)
 				.filter(path -> !path.toString().contains("details-"))
@@ -200,6 +251,9 @@ public class YtUtilityApplication implements CommandLineRunner {
 
 						// write the details file with the api results
 						writeJsonGObject(response.getItems().get(0), getChannelDataDirectory(check.getSnippet().getChannelId()) + "details-" + check.getSnippet().getResourceId().getVideoId() + ".json");
+
+						// write the fetch descriptor
+						if (writeVideoFetchDescriptor) writeVideoFetchDescriptor(check.getSnippet().getResourceId().getVideoId());
 
 						return true;
 					}
@@ -408,6 +462,13 @@ public class YtUtilityApplication implements CommandLineRunner {
 			+ "channel-check-" + check.getId() + ".json");
 	}
 
+	private void writeVideoFetchDescriptor(String videoId) throws IOException {
+		ChannelCheck check = new ChannelCheck();
+		check.setId(videoId);
+		check.setRequestedOn(DateTime.now());
+		writeJsonDescriptor(check, ytProperties.getVideoFetchPath() + File.separator + videoId + ".json");
+	}
+
 	/**
 	 * writes the channel-check json descriptor that gets picked up by the channel checker
 	 */
@@ -491,6 +552,9 @@ public class YtUtilityApplication implements CommandLineRunner {
 
 		File channeldata = new File(ytProperties.getChannelDataPath());
 		if (!channeldata.exists()) channeldata.mkdirs();
+
+		File videofetch = new File(ytProperties.getVideoFetchPath());
+		if (!videofetch.exists()) videofetch.mkdirs();
 
 		return true;
 	}
