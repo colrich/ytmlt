@@ -179,7 +179,11 @@ public class YtUtilityApplication implements CommandLineRunner {
 								LOGGER.log(Level.INFO, "fetch-videos -> each descriptor | going to fetch: " +
 									check.getId());
 								
-								String cmd = "/Users/colrich/homelab/p/ytu/ytmlt/src/main/resources/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
+								String chmod = "chmod a+x /app/BOOT-INF/classes/bin/youtube-dl";
+								Runtime.getRuntime().exec(chmod);
+
+//								String cmd = "/Users/colrich/homelab/p/ytu/ytmlt/src/main/resources/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
+								String cmd = "/app/BOOT-INF/classes/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
 								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | run cmd: " + cmd);
 								Process dlp = Runtime.getRuntime().exec(cmd);
 
