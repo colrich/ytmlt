@@ -2,9 +2,7 @@ package io.gridbug.ytu.ytutility;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.core.json.WriterBasedJsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.client.json.JsonParser;
 
 import com.google.api.services.youtube.model.*;
@@ -21,8 +19,6 @@ import java.io.OutputStreamWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -30,7 +26,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
@@ -39,7 +34,8 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import io.gridbug.ytu.ytutility.configuration.YTUProperties;
 import io.gridbug.ytu.ytutility.configuration.YoutubeService;
@@ -50,7 +46,7 @@ import io.gridbug.ytu.ytutility.model.VideoForChannelCheck;
 import io.gridbug.ytu.ytutility.model.ChannelCheck;
 import io.gridbug.ytu.ytutility.model.ChannelInfo;
 
-
+@EnableScheduling
 @SpringBootApplication
 public class YtUtilityApplication implements CommandLineRunner {
 
@@ -89,17 +85,6 @@ public class YtUtilityApplication implements CommandLineRunner {
 				System.exit(PATH_FAILURE);
 			}
 
-			YouTube youtube = ytService.getYouTubeService();
-//			printChannelStats(youtube, "PowerfulJRE");
-//			writeUserSubs(youtube);
-//			writeChannelInfo(youtube, "UCThv5tYUVaG4ZPA3p6EXZbQ");
-//			writeChannelInfo(youtube, "UC6E2mP01ZLH_kbAyeazCNdg");
-//			writeChannelUploads(youtube, "UU6E2mP01ZLH_kbAyeazCNdg");
-//			writeVideoDetails(youtube, "Ob8gpcBmGvg");
-//			writeVideoComments(youtube, "Ob8gpcBmGvg");
-//			loadChannelInfoJson("upv.json");
-//			testDatabase();
-
 			// if we're invoked with no args, we don't do any CLI tasks. in this case, we simply
 			// want the spring mvc webapp to start serving, so we return from this CLI runner 
 			// and allow that to happen
@@ -112,19 +97,14 @@ public class YtUtilityApplication implements CommandLineRunner {
 			// by pulling all the pages from the api
 			if (pargs.getOptionNames().contains("fetch-subs")) {
 				LOGGER.log(Level.INFO, "yt utility called fetch-subs");
-				writeUserSubs(youtube, ytProperties.getSubsPath());
+				fetchSubs();
 			}
 
 			// if invoked with --subs-to-db, we'll create/update entries in the database for each
 			// subscription in each of the files in the subs json directory
 			if (pargs.getOptionNames().contains("subs-to-db")) {
 				LOGGER.log(Level.INFO, "yt utility called subs-to-db");
-				try (Stream<Path> paths = Files.walk(Paths.get(ytProperties.getSubsPath()))) {
-					LOGGER.log(Level.INFO, "results: " + paths.filter(Files::isRegularFile)
-							.filter(path -> path.getFileName().toString().startsWith("mysubs-"))
-							.map(path -> putSubJsonToDB(path))
-							.collect(Collectors.toList()));
-				}
+				subsToDb();
 			}
 
 			// if invoked with --stage-channel-check, we write channel check descriptors to the 
@@ -132,7 +112,7 @@ public class YtUtilityApplication implements CommandLineRunner {
 			// if an entry exists, we write the descriptor if last check was > specified threshold
 			if (pargs.getOptionNames().contains("stage-channel-check")) {
 				LOGGER.log(Level.INFO, "yt utility called stage-channel-check");
-				stageChannelCheck(pargs);
+				stageChannelCheck();
 			}
 
 			// if invoked with --run-channel-check, we will look at the descriptors in the channel
@@ -140,7 +120,7 @@ public class YtUtilityApplication implements CommandLineRunner {
 			// removed as they are processed
 			if (pargs.getOptionNames().contains("run-channel-check")) {
 				LOGGER.log(Level.INFO, "yt utility called run-channel-check");
-				runChannelCheck(youtube, pargs);
+				runChannelCheck();
 			}
 
 			// if invoked with --stage-video-for-channel-check, we will write a descriptor requesting
@@ -155,68 +135,19 @@ public class YtUtilityApplication implements CommandLineRunner {
 			// no existing info for the channel exists; otherwise we'll pull only new video entries
 			if (pargs.getOptionNames().contains("run-video-for-channel-check")) {
 				LOGGER.log(Level.INFO, "yt utility called run-video-for-channel-check");
-				runVideoForChannelCheck(youtube);
+				runVideoForChannelCheck();
 			}
 
 			// if invoked with --fetch-video-details, we use the api to get detailed info about each
 			// video in the channel data directory, skipping those that have already been fetched
 			if (pargs.getOptionNames().contains("fetch-video-details")) {
 				LOGGER.log(Level.INFO, "yt utility called fetch-video-details");
-				fetchVideoDetails(youtube, true);
+				fetchVideoDetails();
 			}
 
 			if (pargs.getOptionNames().contains("fetch-videos")) {
 				LOGGER.log(Level.INFO, "yt utility called fetch-videos");
-				try (Stream<Path> descriptors = Files.walk(Paths.get(ytProperties.getVideoFetchPath()))) {
-					List<Boolean> outcomes = descriptors.filter(Files::isRegularFile)
-						.filter(path -> path.toString().endsWith(".json"))
-						.map(item -> {
-							try {
-								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | on path: " + item);
-								
-								com.fasterxml.jackson.core.JsonParser parser = getJsonFactory().createParser(item.toFile());
-								ChannelCheck check = parser.readValueAs(ChannelCheck.class);
-								LOGGER.log(Level.INFO, "fetch-videos -> each descriptor | going to fetch: " +
-									check.getId());
-								
-								String chmod = "chmod a+x /app/BOOT-INF/classes/bin/youtube-dl";
-								Runtime.getRuntime().exec(chmod);
-
-//								String cmd = "/Users/colrich/homelab/p/ytu/ytmlt/src/main/resources/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
-								String cmd = "/app/BOOT-INF/classes/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
-								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | run cmd: " + cmd);
-								Process dlp = Runtime.getRuntime().exec(cmd);
-
-								BufferedReader inx = new BufferedReader(new InputStreamReader(dlp.getInputStream()));
-								String linex;
-								while ((linex = inx.readLine()) != null) {
-									LOGGER.log(Level.INFO, linex);
-								}
-
-								BufferedReader in = new BufferedReader(new InputStreamReader(dlp.getErrorStream()));
-								String line;
-								while ((line = in.readLine()) != null) {
-									LOGGER.log(Level.INFO, line);
-								}
-
-								dlp.waitFor();
-
-								item.toFile().delete();
-
-								return true;
-							}
-							catch (IOException ioe) {
-								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | io exception on path: " + item, ioe);
-								return false;
-							}
-							catch (InterruptedException ie) {
-								LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | interrupted exception: " + item, ie);
-								return false;
-							}
-						})
-						.collect(Collectors.toList());
-					LOGGER.log(Level.INFO, "fetch-videos | outcomes: " + outcomes);
-				}
+				fetchVideos();
 			}
 
 
@@ -229,7 +160,63 @@ public class YtUtilityApplication implements CommandLineRunner {
 		}
 	}
 
-	private void fetchVideoDetails(YouTube youtube, boolean writeVideoFetchDescriptor) throws IOException {
+	@Scheduled(cron = "0 30 * * * *")
+	private void fetchVideos() throws IOException {
+		try (Stream<Path> descriptors = Files.walk(Paths.get(ytProperties.getVideoFetchPath()))) {
+			List<Boolean> outcomes = descriptors.filter(Files::isRegularFile)
+				.filter(path -> path.toString().endsWith(".json"))
+				.map(item -> {
+					try {
+						LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | on path: " + item);
+						
+						com.fasterxml.jackson.core.JsonParser parser = getJsonFactory().createParser(item.toFile());
+						ChannelCheck check = parser.readValueAs(ChannelCheck.class);
+						LOGGER.log(Level.INFO, "fetch-videos -> each descriptor | going to fetch: " +
+							check.getId());
+						
+						String chmod = "chmod a+x /app/BOOT-INF/classes/bin/youtube-dl";
+						Runtime.getRuntime().exec(chmod);
+
+//								String cmd = "/Users/colrich/homelab/p/ytu/ytmlt/src/main/resources/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
+						String cmd = "/app/BOOT-INF/classes/bin/youtube-dl -o " + ytProperties.getVideosPath() + File.separator + "%(id)s-%(title)s.%(ext)s " + check.getId();
+						LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | run cmd: " + cmd);
+						Process dlp = Runtime.getRuntime().exec(cmd);
+
+						BufferedReader inx = new BufferedReader(new InputStreamReader(dlp.getInputStream()));
+						String linex;
+						while ((linex = inx.readLine()) != null) {
+							LOGGER.log(Level.INFO, linex);
+						}
+
+						BufferedReader in = new BufferedReader(new InputStreamReader(dlp.getErrorStream()));
+						String line;
+						while ((line = in.readLine()) != null) {
+							LOGGER.log(Level.INFO, line);
+						}
+
+						dlp.waitFor();
+
+						item.toFile().delete();
+
+						return true;
+					}
+					catch (IOException ioe) {
+						LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | io exception on path: " + item, ioe);
+						return false;
+					}
+					catch (InterruptedException ie) {
+						LOGGER.log(Level.INFO, "fetch-videos -> each-descriptor | interrupted exception: " + item, ie);
+						return false;
+					}
+				})
+				.collect(Collectors.toList());
+			LOGGER.log(Level.INFO, "fetch-videos | outcomes: " + outcomes);
+		}
+	}
+
+	@Scheduled(cron = "0 15 * * * *")
+	private void fetchVideoDetails() throws IOException {
+		YouTube youtube = ytService.getYouTubeService();
 		try (Stream<Path> channels = Files.walk(Paths.get(ytProperties.getChannelDataPath()))) {
 			List<Boolean> outcomes = channels.filter(Files::isRegularFile)
 				.filter(path -> !path.toString().contains("details-"))
@@ -257,8 +244,9 @@ public class YtUtilityApplication implements CommandLineRunner {
 						writeJsonGObject(response.getItems().get(0), getChannelDataDirectory(check.getSnippet().getChannelId()) + "details-" + check.getSnippet().getResourceId().getVideoId() + ".json");
 
 						// write the fetch descriptor
-						if (writeVideoFetchDescriptor) writeVideoFetchDescriptor(check.getSnippet().getResourceId().getVideoId());
-
+//						if (writeVideoFetchDescriptor) writeVideoFetchDescriptor(check.getSnippet().getResourceId().getVideoId());
+						writeVideoFetchDescriptor(check.getSnippet().getResourceId().getVideoId());
+						 
 						return true;
 					}
 					catch (Exception ioe) {
@@ -271,7 +259,9 @@ public class YtUtilityApplication implements CommandLineRunner {
 		}
 	}
 
-	private void runVideoForChannelCheck(YouTube youtube) throws IOException {
+	@Scheduled(cron = "0 5 * * * *")
+	private void runVideoForChannelCheck() throws IOException {
+		YouTube youtube = ytService.getYouTubeService();
 		try (Stream<Path> paths = Files.walk(Paths.get(ytProperties.getVideoForChannelCheckPath()))) {
 			List<Boolean> outcomes = paths.filter(Files::isRegularFile)
 				.filter(path -> path.getFileName().toString().endsWith(".json"))
@@ -335,6 +325,7 @@ public class YtUtilityApplication implements CommandLineRunner {
 		if (!dir.exists()) dir.mkdirs();
 	}
 
+	@Scheduled(cron = "0 0 * * * *")
 	private void stageVideoForChannelCheck() {
 		Iterable<ChannelInfo> chans = chandao.findAll();
 		chans.forEach(chan -> {
@@ -349,7 +340,9 @@ public class YtUtilityApplication implements CommandLineRunner {
 		});
 	}
 
-	private void runChannelCheck(YouTube youtube, ApplicationArguments pargs) throws IOException {
+	@Scheduled(cron = "0 20 10 * * *")
+	private void runChannelCheck() throws IOException {
+		YouTube youtube = ytService.getYouTubeService();
 		try (Stream<Path> paths = Files.walk(Paths.get(ytProperties.getChannelCheckPath()))) {
 			List<Boolean> outcomes = paths.filter(Files::isRegularFile)
 				.filter(path -> path.getFileName().toString().endsWith(".json"))
@@ -416,7 +409,8 @@ public class YtUtilityApplication implements CommandLineRunner {
 	 * goes over the subs in the db and writes out a channel-check descriptor for the ones that haven't
 	 * been checked during the specified threshold
 	 */
-	private void stageChannelCheck(ApplicationArguments pargs) {
+	@Scheduled(cron = "0 15 10 * * *")
+	private void stageChannelCheck() {
 		Duration checkThreshold = getCheckThreshold(pargs);
 
 		Iterable<Subscription> allsubs = subsdao.findAll();
@@ -449,6 +443,22 @@ public class YtUtilityApplication implements CommandLineRunner {
 				LOGGER.log(Level.INFO, "stage-channel-check | IO exception on item " + item.getYtId(), ioe);
 			}
 		});
+	}
+
+	@Scheduled(cron = "0 10 10 * * *")
+	private void subsToDb() throws IOException {
+		try (Stream<Path> paths = Files.walk(Paths.get(ytProperties.getSubsPath()))) {
+			LOGGER.log(Level.INFO, "results: " + paths.filter(Files::isRegularFile)
+					.filter(path -> path.getFileName().toString().startsWith("mysubs-"))
+					.map(path -> putSubJsonToDB(path))
+					.collect(Collectors.toList()));
+		}
+	}
+
+	@Scheduled(cron = "0 0 10 * * *")
+	private void fetchSubs() throws IOException {
+		YouTube youtube = ytService.getYouTubeService();
+		writeUserSubs(youtube, ytProperties.getSubsPath());
 	}
 
 	/**
@@ -596,9 +606,6 @@ public class YtUtilityApplication implements CommandLineRunner {
 		com.google.api.client.json.JsonGenerator gen = ytService.getJsonFactory().createJsonGenerator(new FileWriter(new File(filename)));
 		gen.serialize(googleObject);
 		gen.close();
-//		JsonGenerator jsongen = getJsonFactory().createGenerator(new FileOutputStream(filename));
-//		jsongen.writeObject(descriptor);
-//		jsongen.close();
 	}
 
 	private void delaySeconds(int seconds) {
@@ -608,50 +615,6 @@ public class YtUtilityApplication implements CommandLineRunner {
 		catch (InterruptedException ie) {
 			LOGGER.log(Level.INFO, "delay interrupted", ie);
 		}
-	}
-	
-
-	private void writeVideoComments(YouTube youtube, String videoId) throws IOException {
-		YouTube.CommentThreads.List comments = youtube.commentThreads().list("snippet,replies");
-		comments.setVideoId(videoId);
-		comments.setTextFormat("plainText");
-		CommentThreadListResponse response = comments.execute();
-		OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream("comments.json"));
-		writer.write(response.toString());
-		writer.close();
-	}
-
-	private void writeVideoDetails(YouTube youtube, String videoId) throws IOException {
-		YouTube.Videos.List video = youtube.videos().list("snippet,contentDetails,status,statistics");
-		video.setId(videoId);
-		VideoListResponse response = video.execute();
-		OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream("vid.json"));
-		writer.write(response.toString());
-		writer.close();
-	}
-
-	private void writeChannelUploads(YouTube youtube, String playlistId) throws IOException {
-		YouTube.PlaylistItems.List videos = youtube.playlistItems().list("snippet,contentDetails");
-		videos.setPlaylistId(playlistId);
-		PlaylistItemListResponse response = videos.execute();
-		OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream("videos.json"));
-		writer.write(response.toString());
-		writer.close();
-	}
-
-	private void writeChannelInfo(YouTube youtube, String channelId) throws IOException {
-		YouTube.Channels.List videos = youtube.channels().list("snippet,contentDetails,statistics");
-		videos.setId(channelId);
-		ChannelListResponse response = videos.execute();
-		OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream("upvx.json"));
-		writer.write(response.toString());
-		writer.close();
-	}
-
-	private void loadChannelInfoJson(String jsonpath) throws IOException {
-		JsonParser parser = ytService.getJsonFactory().createJsonParser(new FileInputStream(new File(jsonpath)));
-		ChannelListResponse response = parser.parse(ChannelListResponse.class);
-		System.out.println("found in response: " + response.getItems().get(0).getSnippet().getDescription());
 	}
 
 	private void writeUserSubs(YouTube youtube, String path) throws IOException {
@@ -671,26 +634,5 @@ public class YtUtilityApplication implements CommandLineRunner {
 			nextPageToken = response.getNextPageToken();
 		}
 		while (nextPageToken != null && !nextPageToken.equals(""));
-	}
-
-	private void printChannelStats(YouTube youtube, String name) {
-		try {
-			YouTube.Channels.List channelsListByUsernameRequest = youtube.channels().list("snippet,contentDetails,statistics");
-			channelsListByUsernameRequest.setForUsername(name);
-
-			ChannelListResponse response = channelsListByUsernameRequest.execute();
-			Channel channel = response.getItems().get(0);
-			System.out.printf(
-				"This channel's ID is %s. Its title is '%s', and it has %s views.\n",
-				channel.getId(),
-				channel.getSnippet().getTitle(),
-				channel.getStatistics().getViewCount());
-		} catch (GoogleJsonResponseException e) {
-			e.printStackTrace();
-			System.err.println("There was a service error: " +
-				e.getDetails().getCode() + " : " + e.getDetails().getMessage());
-		} catch (Throwable t) {
-			t.printStackTrace();
-		}		
 	}
 }
